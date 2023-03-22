@@ -9,6 +9,9 @@ import matplotlib.pyplot as plt
 
 RES_X = 1280
 RES_Y = 720
+# Accuracy degrades rapidly after the values in the Z buffer reach a certain point
+# Choose this at your discretion
+Z_BUF_MAX = 0.993
 
 # Linearize Depth from an OpenGL buffer
 def linearize_depth(depth, znear, zfar):
@@ -17,8 +20,6 @@ def linearize_depth(depth, znear, zfar):
 
 def depth_on_control(m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_over_z, cam_y_over_z, sample_list):
   try:
-    target_depth = (d.time * 2) % 10.0 + 0.5
-
     # Render the simulated camera
     mujoco.mjv_updateScene(m, d, vopt, pert, cam, mujoco.mjtCatBit.mjCAT_ALL, scn)
     mujoco.mjr_render(viewport, scn, ctx)
@@ -44,8 +45,9 @@ def depth_on_control(m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_ov
 
     sample_list.append(error)
 
-    print('znear {:0.1f} zfar {:0.1f} est {:0.2f} gt {:0.2f} instant abs {:0.2e} mean {:0.2e} std dev {:0.2e} max {:0.2e} min {:0.2e} N {:0.02e}'.format(
-      znear, zfar, depth_hat, depth_gt,
+    z_target_max = linearize_depth(Z_BUF_MAX, znear, zfar) # Accuracy degrades rapidly after the values in the Z buffer reach a certain point
+    print('znear {:0.1f} zfar {:0.1f} max_gt {:0.2f} est {:0.2f} gt {:0.2f} instant abs {:0.2e} mean {:0.2e} std dev {:0.2e} max {:0.2e} min {:0.2e} N {:0.02e}'.format(
+      znear, zfar, z_target_max, depth_hat, depth_gt,
       np.abs(depth_hat-depth_gt),
       np.mean(sample_list),
       np.std(sample_list),
@@ -57,8 +59,8 @@ def depth_on_control(m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_ov
     depth_linear[depth_linear > m.vis.map.zfar - 0.0005] = 0 # Zero out depths farther than the z buffer
 
     # Set the position of the moving target
-    next_target_depth = (d.time * 2) % (zfar - znear) + znear
-    d.mocap_pos[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][1] = target_depth
+    next_target_depth = (d.time * 2) % (z_target_max - znear) + znear
+    d.mocap_pos[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][1] = next_target_depth
 
     cv2.imshow('depth', depth_linear / np.max(depth_linear))
     cv2.waitKey(1)
@@ -108,8 +110,8 @@ def load_callback(m=None, d=None):
     yfov = m.cam_fovy[cam.fixedcamid]
     fy = (RES_Y/2) / np.tan(yfov * np.pi / 180 / 2)
     fx = fy
-    cx = RES_X / 2.0
-    cy = RES_Y / 2.0
+    cx = (RES_X-1) / 2.0
+    cy = (RES_Y-1) / 2.0
 
     cam_K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
 
