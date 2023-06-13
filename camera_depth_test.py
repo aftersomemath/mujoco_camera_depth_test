@@ -135,7 +135,7 @@ def depth_on_control(m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_ov
 
     # Set the position of the moving target
     next_target_depth = (d.time * 2) % (z_target_max - znear) + znear
-    # next_target_depth = z_target_max
+    # next_target_depth = z_target_max - 0.1
     d.mocap_pos[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][1] = next_target_depth
 
     # next_q_wp = R.from_rotvec(np.array([1.0, 0.0, 0.0]) * np.sin(d.time)).as_quat()
@@ -191,13 +191,48 @@ def load_callback(m=None, d=None):
     # this article might be relevant, but after working it through
     # I still get that the -0.5 offset should not be helping as it is (3-4x more accurate with offset)
     # https://www.realtimerendering.com/blog/the-center-of-the-pixel-is-0-50-5/#:~:text=OpenGL%20has%20always%20considered%20the,the%20program%20with%20DirectX%2010.
+    # https://lmb.informatik.uni-freiburg.de/people/reisert/opengl/doc/glFrustum.html
+    # https://registry.khronos.org/OpenGL-Refpages/gl4/html/glViewport.xhtml
+    # https://stackoverflow.com/a/25468051
+    # https://community.khronos.org/t/multisampled-depth-renderbuffer/55751/8
+    # https://www.khronos.org/opengl/wiki/Fragment_Shader#System_inputs
+    # khronos.org/opengl/wiki/Type_Qualifier_(GLSL)#Interpolation_qualifiers
+    # https://registry.khronos.org/OpenGL-Refpages/gl4/html/gl_SamplePosition.xhtml
+    # "When rendering to a non-multisample buffer, or if multisample rasterization is disabled, gl_SamplePosition will be (0.5, 0.5)."
+    # https://community.amd.com/t5/archives-discussions/how-depth-is-interpolated-in-rasterizer-linear-depth-instead-of/td-p/390440
+    # https://nlguillemot.wordpress.com/2016/12/07/reversed-z-in-opengl/
+    # http://www.humus.name/Articles/Persson_CreatingVastGameWorlds.pdf
+    # https://developer.nvidia.com/content/depth-precision-visualized
+    # https://www.lighthouse3d.com/tutorials/glsl-tutorial/rasterization-and-interpolation
     znear = m.vis.map.znear * m.stat.extent
     fy = (RES_Y/2) / np.tan(yfov * np.pi / 180 / 2)
     fx = fy
-    cx = (RES_X-1) / 2.0 - 0.5 # Extra half pixel for OpenGL? (unexplained)
-    cy = (RES_Y-1) / 2.0 - 0.5
+    cx = RES_X / 2.0 - 0.5 # Check this??
+    cy = RES_Y / 2.0 - 0.5
 
     cam_K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+
+    # viewport
+    # 0 0 1280 720 
+    # cam
+    # -0.034000 0.000000 1.000000 -0.000000 1.000000 -0.000000 0.000000 0.000000 1.000000 0.000000 -0.047279 0.047279 0.114142 22.828426 
+    # 0.034000 0.000000 1.000000 -0.000000 1.000000 -0.000000 0.000000 0.000000 1.000000 0.000000 -0.047279 0.047279 0.114142 22.828426 
+    # 0.000000 0.000000 1.000000 -0.000000 1.000000 -0.000000 0.000000 0.000000 1.000000 0.000000 -0.047279 0.047279 0.114142 22.828426 
+    # perspective matrix
+    # 1.357995, 0.000000, 0.000000, 0.000000,
+    # 0.000000, 2.414214, 0.000000, 0.000000,
+    # 0.000000, 0.000000, -1.010050, -1.000000,
+    # 0.000000, 0.000000, -0.229431, 0.000000, 
+
+    print('our params')
+    print(fx/cx)
+    print(fy/cy)
+    # with -0.5
+    # 1.3601203168299127                                                                                                                                                                                                                   
+    # 2.420938391237644
+    # without -0.5
+    # 1.3590568920317658                                                                                                                                                                                                                   
+    # 2.417571300290165
 
     # Get the 3D direction vector for each pixel in the simulated sensor
     # in the format (x, y, 1)
