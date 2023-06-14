@@ -54,108 +54,111 @@ def depth_on_control(m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_ov
     image = cv2.flip(image, 0) # OpenGL renders with inverted y axis
     depth = cv2.flip(depth, 0) # OpenGL renders with inverted y axis
 
-    # Show the simulated camera image
-    # cv2.imshow('image', image / np.max(image)) # the color corresponds with the id
-
     # Check XML reference, choice of zfar and znear can have big effect on accuracy
     zfar  = m.vis.map.zfar * m.stat.extent
     znear = m.vis.map.znear * m.stat.extent
-
-    depth = depth.astype(np.float64)
-    depth_hat_buf = depth[test_pix]
-    depth_linear    = linearize_depth(depth, znear=znear, zfar=zfar)
-    depth_linear_CD = linearize_depth_CD(depth, C=C, D=D)
-    depth_hat = depth_linear[test_pix] # Center of screen
-    depth_hat_CD = depth_linear_CD[test_pix]
-
-    # For visualization
-    # depth_linear[depth_linear > m.vis.map.zfar - 0.0005] = 0 # Zero out depths farther than the z buffer
-
-    # cv2.imshow('depth', depth_linear / np.max(depth_linear))
-
-    # # Save off some pointclouds for visualization later
-    # p_X = cam_x_over_z * depth_linear
-    # p_Y = cam_y_over_z * depth_linear
-    # p_Z = depth_linear
-    # #p = np.dstack((p_X, p_Y, p_Z))
-
-    # # The 3D normal of the visible plane in the planes coordinate frame (this is time invariant)
-    # R_wp = d.body('target').xmat.reshape((3,3))
-    # t_wp = d.body('target').xpos
-
-    # R_wg = d.camera('cam').xmat.reshape((3,3))
-    # t_wg = d.camera('cam').xpos
-
-    # # Get the target odometry in the drone frame
-    # # that will be used for state estimation
-    # # OpenGL camera frame to camera
-    # R_gc = np.array([[1, 0, 0],
-    #                 [0, -1, 0],
-    #                 [0, 0, -1]])
-    # R_wc = R_wg @ R_gc
-    # t_wc = t_wg
-
-    # R_cp =  R_wc.T @ R_wp
-    # t_cp = -R_wc.T @ t_wc + R_wc.T @ t_wp
-
-    # # Normal in the planes coordinate frame
-    # n_p  = np.array([0.0, -1.0, 0.0])
-    # # position of the normal in the planes coordinate frame
-    # pn_n = np.array([0.0, 0.0, 0.0])
-
-    # # Normal and position of normal in the camera frame
-    # n_c  = R_cp @ n_p
-    # pn_c = R_cp @ pn_n + t_cp
-
-    # # Todo it seems like we are not as close as expected
-    # # print(pn_c, n_c, depth_gt)
-
-    # # Calculate depth of intersection
-    # # points on plane satisfy
-    # # (x - pn_c)^T n_c = 0
-    # # implying
-    # # x^T n_c - pn_c^T n_c = 0
-    # #
-    # # rays from the camera satisfy
-    # # x_1 = cam_x_over_z * x_3
-    # # x_2 = cam_y_over_z * x_3
-    # # x_3 = x_3
-    # #
-    # # So we have
-    # # x_3 * [cam_x_over_z, cam_y_over_z, 1] n_c - pn_c^T n_c = 0
-    # # x_3 = (pn_c^T n_c) / ([cam_x_over_z, cam_y_over_z, 1] n_c)
-    # depth_gt_plane = (pn_c.T @ n_c) / (n_c[0] * cam_x_over_z + n_c[1] * cam_y_over_z + n_c[2])
-    # # depth_gt = depth_gt_plane[test_pix] # Center of screen
-
-    depth_gt = d.mocap_pos[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][1]
-    depth_gt_buf = inverse_depth(depth_gt, znear, zfar)
-    depth_gt_buf_CD = inverse_depth_CD(depth_gt, C, D)
-    # print('CD buf', depth_gt_buf_CD - depth_gt_buf, depth_gt_buf_CD, depth_gt_buf)
-
-    error = depth_hat - depth_gt
-    error_CD = depth_hat_CD - depth_gt
-
-    error_buf    = depth_hat_buf - depth_gt_buf
-    error_buf_CD = depth_hat_buf - depth_gt_buf_CD
-    print('buf CD', error_buf_CD, depth_hat_buf, depth_gt_buf_CD)
-
-    error_gt = linearize_depth(error_buf + depth_gt_buf, znear, zfar) - linearize_depth(depth_gt_buf, znear, zfar)
-
-    sample_list.append(error)
-
     z_target_max = linearize_depth(z_max_buf, znear, zfar) # Accuracy degrades rapidly after the values in the Z buffer reach a certain point
-    print('znear {:0.8f} zfar {:0.1f} hat_buf {:0.2e} max_gt {:0.2f} est {:0.2f} gt {:0.2f} instant {:0.2e} instant CD {:0.2e} instant gt {:0.2e} instant buf {:0.2e} instant buf CD {:0.2e} mean {:0.2e} std dev {:0.2e} max {:0.2e} min {:0.2e} N {:0.02e}'.format(
-      znear, zfar, depth_hat_buf, z_target_max, depth_hat, depth_gt,
-      error,
-      error_CD,
-      error_gt,
-      error_buf,
-      error_buf_CD,
-      np.mean(sample_list),
-      np.std(sample_list),
-      np.max(np.abs(sample_list)),
-      np.min(np.abs(sample_list)),
-      len(sample_list)))
+
+    # Show the simulated camera image
+    # cv2.imshow('image', image / np.max(image)) # the color corresponds with the id
+
+    if d.time > 0.0:
+      depth = depth.astype(np.float64)
+      depth_hat_buf = depth[test_pix]
+      depth_linear    = linearize_depth(depth, znear=znear, zfar=zfar)
+      depth_hat = depth_linear[test_pix] # Center of screen
+      if linearize_depth_CD is not None:
+        depth_linear_CD = linearize_depth_CD(depth, C=C, D=D)
+        depth_hat_CD = depth_linear_CD[test_pix]
+
+      # For visualization
+      # depth_linear[depth_linear > m.vis.map.zfar - 0.0005] = 0 # Zero out depths farther than the z buffer
+
+      # cv2.imshow('depth', depth_linear / np.max(depth_linear))
+
+      # # Save off some pointclouds for visualization later
+      # p_X = cam_x_over_z * depth_linear
+      # p_Y = cam_y_over_z * depth_linear
+      # p_Z = depth_linear
+      # #p = np.dstack((p_X, p_Y, p_Z))
+
+      # The 3D normal of the visible plane in the planes coordinate frame (this is time invariant)
+      R_wp = d.body('target').xmat.reshape((3,3))
+      t_wp = d.body('target').xpos
+
+      R_wg = d.camera('cam').xmat.reshape((3,3))
+      t_wg = d.camera('cam').xpos
+
+      # Get the target odometry in the drone frame
+      # that will be used for state estimation
+      # OpenGL camera frame to camera
+      R_gc = np.array([[1, 0, 0],
+                      [0, -1, 0],
+                      [0, 0, -1]])
+      R_wc = R_wg @ R_gc
+      t_wc = t_wg
+
+      R_cp =  R_wc.T @ R_wp
+      t_cp = -R_wc.T @ t_wc + R_wc.T @ t_wp
+
+      # Normal in the planes coordinate frame
+      n_p  = np.array([0.0, -1.0, 0.0])
+      # position of the normal in the planes coordinate frame
+      pn_n = np.array([0.0, 0.0, 0.0])
+
+      # Normal and position of normal in the camera frame
+      n_c  = R_cp @ n_p
+      pn_c = R_cp @ pn_n + t_cp
+
+      # Todo it seems like we are not as close as expected
+      # print(pn_c, n_c, depth_gt)
+
+      # Calculate depth of intersection
+      # points on plane satisfy
+      # (x - pn_c)^T n_c = 0
+      # implying
+      # x^T n_c - pn_c^T n_c = 0
+      #
+      # rays from the camera satisfy
+      # x_1 = cam_x_over_z * x_3
+      # x_2 = cam_y_over_z * x_3
+      # x_3 = x_3
+      #
+      # So we have
+      # x_3 * [cam_x_over_z, cam_y_over_z, 1] n_c - pn_c^T n_c = 0
+      # x_3 = (pn_c^T n_c) / ([cam_x_over_z, cam_y_over_z, 1] n_c)
+      depth_gt_plane = (pn_c.T @ n_c) / (n_c[0] * cam_x_over_z + n_c[1] * cam_y_over_z + n_c[2])
+      depth_gt = depth_gt_plane[test_pix] # Center of screen
+
+      # depth_gt = d.mocap_pos[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][1]
+      depth_gt_buf = inverse_depth(depth_gt, znear, zfar)
+      error_buf    = depth_hat_buf - depth_gt_buf
+      error = depth_hat - depth_gt
+
+      if linearize_depth_CD is not None:
+        depth_gt_buf_CD = inverse_depth_CD(depth_gt, C, D)
+        # print('CD buf', depth_gt_buf_CD - depth_gt_buf, depth_gt_buf_CD, depth_gt_buf)
+        error_CD = depth_hat_CD - depth_gt
+        error_buf_CD = depth_hat_buf - depth_gt_buf_CD
+        # print('buf CD', error_buf_CD, depth_hat_buf, depth_gt_buf_CD)
+
+        sample_list.append(error_CD)
+      else:
+        error_CD = 0.0
+        error_buf_CD = 0.0
+        sample_list.append(error)
+
+      print('znear {:0.8f} zfar {:0.1f} hat_buf {:0.2e} max_gt {:0.2f} est {:0.2f} gt {:0.2f} instant {:0.2e} instant CD {:0.2e} instant buf {:0.2e} instant buf CD {:0.2e} mean {:0.2e} std dev {:0.2e} max {:0.2e} min {:0.2e} N {:0.02e}'.format(
+        znear, zfar, depth_hat_buf, z_target_max, depth_hat, depth_gt,
+        error,
+        error_CD,
+        error_buf,
+        error_buf_CD,
+        np.mean(sample_list),
+        np.std(sample_list),
+        np.max(np.abs(sample_list)),
+        np.min(np.abs(sample_list)),
+        len(sample_list)))
 
     target_mujoco_id = None
     for vgeom in scn.geoms:
@@ -170,9 +173,9 @@ def depth_on_control(m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_ov
     # cv2.waitKey(1)
 
     # Set the position of the moving target
-    # next_target_depth = (d.time * 2) % (z_target_max - znear) + znear
+    next_target_depth = (d.time * 2) % (z_target_max - znear) + znear
     # next_target_depth = (d.time * 2) % (z_target_max - 0.9 * z_target_max) + 0.9 * z_target_max
-    next_target_depth = z_target_max  #0.000025
+    # next_target_depth = z_target_max - 1.0
     d.mocap_pos[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][1] = next_target_depth
 
     # next_q_wp = R.from_rotvec(np.array([1.0, 0.0, 0.0]) * np.sin(d.time)).as_quat()
@@ -301,17 +304,21 @@ if __name__ == '__main__':
   # Accuracy degrades rapidly after the values in the Z buffer reach a certain point
   # Choose this at your discretion
   if args.z_buf_type == 'ogl_default':
-    linearize_depth = linearize_depth_negative_one_to_one
-    inverse_depth   = inverse_depth_negative_one_to_one
-    z_max_buf = 1.0
+    linearize_depth    = linearize_depth_negative_one_to_one
+    linearize_depth_CD = None
+    inverse_depth    = inverse_depth_negative_one_to_one
+    inverse_depth_CD = None
+    z_max_buf = 0.993
+    C = None
+    D = None
   elif args.z_buf_type == 'ogl_negz':
-    linearize_depth = linearize_depth_zero_to_one
+    linearize_depth    = linearize_depth_zero_to_one
     linearize_depth_CD = linearize_depth_zero_to_one_CD
-    inverse_depth   = inverse_depth_zero_to_one
+    inverse_depth    = inverse_depth_zero_to_one
     inverse_depth_CD = inverse_depth_zero_to_one_CD
     C = 5.0250887871e-03
     D = 1.1471571028e-01
-    z_max_buf = 0.0
+    z_max_buf = 0.007
   else:
     raise Exception('Unrecognized z_buf_type')
 
