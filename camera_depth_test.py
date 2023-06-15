@@ -12,36 +12,53 @@ from scipy.spatial.transform import Rotation as R
 RES_X = 1280
 RES_Y = 720
 
-# Linearize Depth from an OpenGL negative_one_to_one depth buffer
-# which was linearly scaled to zero to one.
-def linearize_depth_negative_one_to_one(depth, znear, zfar):
-    zlinear = (znear * zfar) / (zfar + depth * (znear - zfar))
-    return zlinear
+def glFrustum_CD_float32(znear, zfar):
+  zfar  = np.float32(zfar)
+  znear = np.float32(znear)
+  C = -(zfar + znear)/(zfar - znear)
+  D = -(np.float32(2)*zfar*znear)/(zfar - znear)
+  return C, D
 
-def inverse_depth_negative_one_to_one(zlinear, znear, zfar):
-  zbuf = ((((znear * zfar) / zlinear) - zfar) / (znear - zfar))
+def ogl_zbuf_projection(zlinear, C, D):
+  zbuf = -C + (1/zlinear)*D # TODO why -C?
   return zbuf
 
-# Linearize Depth from an OpenGL zero_to_one negative Z depth buffer
-# which was linearly scaled to zero to one
-def linearize_depth_zero_to_one(depth, znear, zfar):
-    zlinear = (znear * zfar) / (zfar + (-depth + 1) * (znear - zfar))
-    return zlinear
-
-def linearize_depth_zero_to_one_CD(depth, C, D):
-  zlinear = 1 / ((depth - (-C)) / D)
+def ogl_zbuf_projection_inverse(zbuf, C, D):
+  zlinear = 1 / ((zbuf - (-C)) / D) # TODO why -C?
   return zlinear
 
-def inverse_depth_zero_to_one(zlinear, znear, zfar):
-  zbuf = -(((((znear * zfar) / zlinear) - zfar) / (znear - zfar)) - 1)
-  return zbuf
+def ogl_zbuf_default(zlinear, znear=None, zfar=None, C=None, D=None):
+  if C is None:
+    C, D = glFrustum_CD_float32(znear, zfar)
+  zbuf = ogl_zbuf_projection(zlinear, C, D)
+  zbuf_scaled = 0.5 * zbuf + 0.5
+  return zbuf_scaled
 
-def inverse_depth_zero_to_one_CD(zlinear, C, D):
-  zbuf = -C + (1/zlinear)*D
-  return zbuf
+def ogl_zbuf_negz(zlinear, znear=None, zfar=None, C=None, D=None):
+  if C is None:
+    C, D = glFrustum_CD_float32(znear, zfar)
+    C = np.float32(-0.5)*C - np.float32(0.5)
+    D = np.float32(-0.5)*D
+  zlinear = ogl_zbuf_projection(zlinear, C, D)
+  return zlinear
+
+def ogl_zbuf_default_inv(zbuf_scaled, znear=None, zfar=None, C=None, D=None):
+  if C is None:
+    C, D = glFrustum_CD_float32(znear, zfar)
+  zbuf = 2.0 * zbuf_scaled - 1.0
+  zlinear = ogl_zbuf_projection_inverse(zbuf, C, D)
+  return zlinear
+
+def ogl_zbuf_negz_inv(zbuf, znear=None, zfar=None, C=None, D=None):
+  if C is None:
+    C, D = glFrustum_CD_float32(znear, zfar)
+    C = np.float32(-0.5)*C - np.float32(0.5)
+    D = np.float32(-0.5)*D
+  zlinear = ogl_zbuf_projection_inverse(zbuf, C, D)
+  return zlinear
 
 def depth_on_control(m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_over_z, cam_y_over_z, sample_list,
-                     linearize_depth=None, linearize_depth_CD=None, inverse_depth=None, inverse_depth_CD=None, z_max_buf=None, C=None, D=None):
+                     ogl_zbuf=None, ogz_zbuf_inv=None, z_max_buf=None, C=None, D=None):
   try:
     test_pix = (int(RES_Y/2), int(RES_X/2))
 
@@ -57,7 +74,7 @@ def depth_on_control(m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_ov
     # Check XML reference, choice of zfar and znear can have big effect on accuracy
     zfar  = m.vis.map.zfar * m.stat.extent
     znear = m.vis.map.znear * m.stat.extent
-    z_target_max = linearize_depth(z_max_buf, znear, zfar) # Accuracy degrades rapidly after the values in the Z buffer reach a certain point
+    z_target_max = ogz_zbuf_inv(z_max_buf, znear, zfar) # Accuracy degrades rapidly after the values in the Z buffer reach a certain point
 
     # Show the simulated camera image
     # cv2.imshow('image', image / np.max(image)) # the color corresponds with the id
@@ -65,10 +82,10 @@ def depth_on_control(m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_ov
     if d.time > 0.0:
       depth = depth.astype(np.float64)
       depth_hat_buf = depth[test_pix]
-      depth_linear    = linearize_depth(depth, znear=znear, zfar=zfar)
+      depth_linear    = ogz_zbuf_inv(depth, znear, zfar)
       depth_hat = depth_linear[test_pix] # Center of screen
-      if linearize_depth_CD is not None:
-        depth_linear_CD = linearize_depth_CD(depth, C=C, D=D)
+      if C is not None:
+        depth_linear_CD = ogz_zbuf_inv(depth, C=C, D=D)
         depth_hat_CD = depth_linear_CD[test_pix]
 
       # For visualization
@@ -131,12 +148,12 @@ def depth_on_control(m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_ov
       depth_gt = depth_gt_plane[test_pix] # Center of screen
 
       # depth_gt = d.mocap_pos[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][1]
-      depth_gt_buf = inverse_depth(depth_gt, znear, zfar)
+      depth_gt_buf = ogl_zbuf(depth_gt, znear, zfar)
       error_buf    = depth_hat_buf - depth_gt_buf
       error = depth_hat - depth_gt
 
-      if linearize_depth_CD is not None:
-        depth_gt_buf_CD = inverse_depth_CD(depth_gt, C, D)
+      if C is not None:
+        depth_gt_buf_CD = ogl_zbuf(depth_gt, C=C, D=D)
         # print('CD buf', depth_gt_buf_CD - depth_gt_buf, depth_gt_buf_CD, depth_gt_buf)
         error_CD = depth_hat_CD - depth_gt
         error_buf_CD = depth_hat_buf - depth_gt_buf_CD
@@ -175,7 +192,7 @@ def depth_on_control(m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_ov
     # Set the position of the moving target
     next_target_depth = (d.time * 2) % (z_target_max - znear) + znear
     # next_target_depth = (d.time * 2) % (z_target_max - 0.9 * z_target_max) + 0.9 * z_target_max
-    # next_target_depth = z_target_max - 1.0
+    # next_target_depth = z_target_max
     d.mocap_pos[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][1] = next_target_depth
 
     # next_q_wp = R.from_rotvec(np.array([1.0, 0.0, 0.0]) * np.sin(d.time)).as_quat()
@@ -192,7 +209,7 @@ def depth_on_control(m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_ov
     print(e)
     raise e
 
-def load_callback(m=None, d=None, linearize_depth=None, linearize_depth_CD=None, inverse_depth=None, inverse_depth_CD=None, z_max_buf=None, C=None, D=None):
+def load_callback(m=None, d=None, ogl_zbuf=None, ogl_zbuf_inv=None, z_max_buf=None, C=None, D=None):
   # Clear the control callback before loading a new model
   # or a Python exception is raised
   mujoco.set_mjcb_control(None)
@@ -244,35 +261,19 @@ def load_callback(m=None, d=None, linearize_depth=None, linearize_depth_CD=None,
     # http://www.humus.name/Articles/Persson_CreatingVastGameWorlds.pdf
     # https://developer.nvidia.com/content/depth-precision-visualized
     # https://www.lighthouse3d.com/tutorials/glsl-tutorial/rasterization-and-interpolation
-    znear = m.vis.map.znear * m.stat.extent
+
     fy = (RES_Y/2) / np.tan(yfov * np.pi / 180 / 2)
     fx = fy
     cx = (RES_X - 1) / 2.0 - 0.5 # Check this??
     cy = (RES_Y - 1) / 2.0 - 0.5
-
     cam_K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
 
-    # viewport
-    # 0 0 1280 720 
-    # cam
-    # -0.034000 0.000000 1.000000 -0.000000 1.000000 -0.000000 0.000000 0.000000 1.000000 0.000000 -0.047279 0.047279 0.114142 22.828426 
-    # 0.034000 0.000000 1.000000 -0.000000 1.000000 -0.000000 0.000000 0.000000 1.000000 0.000000 -0.047279 0.047279 0.114142 22.828426 
-    # 0.000000 0.000000 1.000000 -0.000000 1.000000 -0.000000 0.000000 0.000000 1.000000 0.000000 -0.047279 0.047279 0.114142 22.828426 
-    # perspective matrix
-    # 1.357995, 0.000000, 0.000000, 0.000000,
-    # 0.000000, 2.414214, 0.000000, 0.000000,
-    # 0.000000, 0.000000, -1.010050, -1.000000,
-    # 0.000000, 0.000000, -0.229431, 0.000000, 
-
-    print('our params')
-    print(fx/cx)
-    print(fy/cy)
-    # with -0.5
-    # 1.3601203168299127                                                                                                                                                                                                                   
-    # 2.420938391237644
-    # without -0.5
-    # 1.3590568920317658                                                                                                                                                                                                                   
-    # 2.417571300290165
+    # Debugging, build cam_x_over_z and cam_y_over_z from perspective matrix?
+    # camProject
+    # 1.3579951525e+00 0.0000000000e+00 0.0000000000e+00 0.0000000000e+00 
+    # 0.0000000000e+00 2.4142136574e+00 0.0000000000e+00 0.0000000000e+00 
+    # 0.0000000000e+00 0.0000000000e+00 5.0250887871e-03 -1.0000000000e+00 
+    # 0.0000000000e+00 0.0000000000e+00 1.1471571028e-01 0.0000000000e+00
 
     # Get the 3D direction vector for each pixel in the simulated sensor
     # in the format (x, y, 1)
@@ -292,7 +293,7 @@ def load_callback(m=None, d=None, linearize_depth=None, linearize_depth_CD=None,
     mujoco.set_mjcb_control(
       lambda m, d: depth_on_control(
         m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_over_z, cam_y_over_z, sample_list,
-        linearize_depth, linearize_depth_CD, inverse_depth, inverse_depth_CD, z_max_buf, C, D))
+        ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D))
 
   return m , d
 
@@ -304,22 +305,18 @@ if __name__ == '__main__':
   # Accuracy degrades rapidly after the values in the Z buffer reach a certain point
   # Choose this at your discretion
   if args.z_buf_type == 'ogl_default':
-    linearize_depth    = linearize_depth_negative_one_to_one
-    linearize_depth_CD = None
-    inverse_depth    = inverse_depth_negative_one_to_one
-    inverse_depth_CD = None
+    ogl_zbuf     = ogl_zbuf_default
+    ogl_zbuf_inv = ogl_zbuf_default_inv
     z_max_buf = 0.993
-    C = None
-    D = None
+    C = -1.0100501776e+00
+    D = -2.2943142056e-01
   elif args.z_buf_type == 'ogl_negz':
-    linearize_depth    = linearize_depth_zero_to_one
-    linearize_depth_CD = linearize_depth_zero_to_one_CD
-    inverse_depth    = inverse_depth_zero_to_one
-    inverse_depth_CD = inverse_depth_zero_to_one_CD
+    ogl_zbuf     = ogl_zbuf_negz
+    ogl_zbuf_inv = ogl_zbuf_negz_inv
     C = 5.0250887871e-03
     D = 1.1471571028e-01
     z_max_buf = 0.007
   else:
     raise Exception('Unrecognized z_buf_type')
 
-  viewer.launch(loader=lambda m=None, d=None: load_callback(m, d, linearize_depth, linearize_depth_CD, inverse_depth, inverse_depth_CD, z_max_buf, C, D))
+  viewer.launch(loader=lambda m=None, d=None: load_callback(m, d, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D))
