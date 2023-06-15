@@ -2,6 +2,7 @@ import os
 os.environ['OPENBLAS_NUM_THREADS'] = '1' # Otherwise numpy spawns way too many threads
 
 import argparse
+import glob
 import random
 import traceback
 
@@ -70,13 +71,12 @@ def plot_errors(errors):
   rows = len(errors)
   cols = 4
 
-  plt.figure()
   for i, (name, error) in enumerate(errors.items()):
       plt.subplot(rows, cols, 1 + i*4 + 0)
       plt.title(name)
       plt.plot(error[:, 0], error[:, 1])
       plt.ylabel('mean')
-      plt.grid()
+      plt.grid(True)
       plt.ticklabel_format(style='sci', scilimits=(0,0), axis='y')
       if i == 3:
         plt.xlabel('target z')
@@ -85,7 +85,7 @@ def plot_errors(errors):
       plt.title(name)
       plt.plot(error[:, 0], error[:, 2])
       plt.ylabel('std dev')
-      plt.grid()
+      plt.grid(True)
       plt.ticklabel_format(style='sci', scilimits=(0,0), axis='y')
       if i == 3:
         plt.xlabel('target z')
@@ -94,7 +94,7 @@ def plot_errors(errors):
       plt.title(name)
       plt.plot(error[:, 0], error[:, 3])
       plt.ylabel('min')
-      plt.grid()
+      plt.grid(True)
       plt.ticklabel_format(style='sci', scilimits=(0,0), axis='y')
       if i == 3:
         plt.xlabel('target z')
@@ -103,13 +103,22 @@ def plot_errors(errors):
       plt.title(name)
       plt.plot(error[:, 0], error[:, 4])
       plt.ylabel('max')
-      plt.grid()
+      plt.grid(True)
       plt.ticklabel_format(style='sci', scilimits=(0,0), axis='y')
       if i == 3:
         plt.xlabel('target z')
 
   # plt.tight_layout()
   # plt.show()
+
+def plot_errors_all():
+  files = sorted(glob.glob('errors_*.npz'))
+
+  plt.figure()
+  for f in files:
+    plot_errors(np.load(f))
+  plt.legend(files)
+  plt.show()
 
 def objective_one_frame(x, optimization_dictionary):
   RES_X = optimization_dictionary['RES_X']
@@ -427,7 +436,7 @@ def collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d
     # next_target_depth = z_target_max
     d.mocap_pos[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][1] = next_target_depth
 
-    next_q_wp = R.from_rotvec(np.array([1.0, 0.0, 0.0]) * 45 * np.pi / 180.0).as_quat()
+    next_q_wp = R.from_rotvec(np.array([1.0, 1.0, 0.0]) * 30 * np.pi / 180.0).as_quat()
     d.mocap_quat[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][0]   = next_q_wp[3]
     d.mocap_quat[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][1:4] = next_q_wp[0:3]
 
@@ -440,7 +449,7 @@ def collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d
 
   return errors, optimization_dictionaries
 
-def run_test(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics):
+def run_test(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name):
   m = mujoco.MjModel.from_xml_path('./camera_depth_test.xml')
   d = mujoco.MjData(m)
 
@@ -460,38 +469,45 @@ def run_test(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics):
 
   optimize_intrinsics(new_optimization_dictionaries, 10)
 
+  np.savez(save_name, **new_errors)
+
   plot_errors(errors)
   plot_errors(new_errors)
   plt.show()
 
-  # np.savez('depth_test.npz', **errors)
   # np.savez('depth_info.npz', dicts=optimization_dictionaries)
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  parser.add_argument('--z_buf_type', type=str, help='ogl_default, ogl_negz', required=True)
+  parser.add_argument('--z_buf_type', type=str, help='ogl_default, ogl_negz')
+  parser.add_argument('--plot', action='store_true')
   args = parser.parse_args()
 
-  cv2.setNumThreads(1)
-
-  # Accuracy degrades rapidly after the values in the Z buffer reach a certain point
-  # Choose this at your discretion
-  z_max_buf_negz = (0.0035 / 2) + (0.0035 / 4) + (0.0035 / 8)
-  if args.z_buf_type == 'ogl_default':
-    ogl_zbuf     = ogl_zbuf_default
-    ogl_zbuf_inv = ogl_zbuf_default_inv
-    z_max_buf = 1.0 - z_max_buf_negz
-    C = None #-1.0080322027e+00
-    D = None #-2.0080322027e-01
-    intrinsics = None #np.array([869.11688245,  869.12557739,  639.,         359.12569043])
-  elif args.z_buf_type == 'ogl_negz':
-    ogl_zbuf     = ogl_zbuf_negz
-    ogl_zbuf_inv = ogl_zbuf_negz_inv
-    z_max_buf = z_max_buf_negz
-    C = None #4.0161013603e-03
-    D = None #1.0040161014e-01
-    intrinsics = None #np.array([869.11688245, 869.11653695, 639.        , 359.12489134])
+  if args.plot:
+    plot_errors_all()
   else:
-    raise Exception('Unrecognized z_buf_type')
+    cv2.setNumThreads(1)
 
-  run_test(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics)
+    # Accuracy degrades rapidly after the values in the Z buffer reach a certain point
+    # Choose this at your discretion
+    z_max_buf_negz = (0.0035 / 2) + (0.0035 / 4) + (0.0035 / 8)
+    if args.z_buf_type == 'ogl_default':
+      ogl_zbuf     = ogl_zbuf_default
+      ogl_zbuf_inv = ogl_zbuf_default_inv
+      z_max_buf = 1.0 - z_max_buf_negz
+      C = None #-1.0080322027e+00
+      D = None #-2.0080322027e-01
+      intrinsics = None #np.array([869.11688245,  869.12557739,  639.,         359.12569043])
+      save_name = 'errors_default'
+    elif args.z_buf_type == 'ogl_negz':
+      ogl_zbuf     = ogl_zbuf_negz
+      ogl_zbuf_inv = ogl_zbuf_negz_inv
+      z_max_buf = z_max_buf_negz
+      C = None #4.0161013603e-03
+      D = None #1.0040161014e-01
+      intrinsics = None #np.array([869.11688245, 869.11653695, 639.        , 359.12489134])
+      save_name = 'errors_negz'
+    else:
+      raise Exception('Unrecognized z_buf_type')
+
+    run_test(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name)
