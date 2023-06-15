@@ -35,7 +35,7 @@
     </body>
 
     <body name="target" pos="0 1 1" mocap="true">
-      <geom name="target" type="box" size="100 0.00000000000001 100" rgba=".5 .1 .1 1"/>
+      <geom name="target" type="box" size="1000 0.00000000000001 1000" rgba=".5 .1 .1 1"/>
     </body>
   </worldbody>
 </mujoco>

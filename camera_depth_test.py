@@ -4,6 +4,7 @@ os.environ['OPENBLAS_NUM_THREADS'] = '1' # Otherwise numpy spawns way too many t
 import argparse
 import glob
 import random
+import time
 import traceback
 
 import cv2
@@ -78,8 +79,7 @@ def plot_errors(errors):
       plt.ylabel('mean')
       plt.grid(True)
       plt.ticklabel_format(style='sci', scilimits=(0,0), axis='y')
-      if i == 3:
-        plt.xlabel('target z')
+      plt.xlabel('target z')
 
       plt.subplot(rows, cols, 1 + i*4 + 1)
       plt.title(name)
@@ -87,8 +87,7 @@ def plot_errors(errors):
       plt.ylabel('std dev')
       plt.grid(True)
       plt.ticklabel_format(style='sci', scilimits=(0,0), axis='y')
-      if i == 3:
-        plt.xlabel('target z')
+      plt.xlabel('target z')
 
       plt.subplot(rows, cols, 1 + i*4 + 2)
       plt.title(name)
@@ -96,8 +95,7 @@ def plot_errors(errors):
       plt.ylabel('min')
       plt.grid(True)
       plt.ticklabel_format(style='sci', scilimits=(0,0), axis='y')
-      if i == 3:
-        plt.xlabel('target z')
+      plt.xlabel('target z')
 
       plt.subplot(rows, cols, 1 + i*4 + 3)
       plt.title(name)
@@ -105,8 +103,7 @@ def plot_errors(errors):
       plt.ylabel('max')
       plt.grid(True)
       plt.ticklabel_format(style='sci', scilimits=(0,0), axis='y')
-      if i == 3:
-        plt.xlabel('target z')
+      plt.xlabel('target z')
 
   # plt.tight_layout()
   # plt.show()
@@ -121,6 +118,7 @@ def plot_errors_all():
   plt.show()
 
 def objective_one_frame(x, optimization_dictionary):
+  start = time.time()
   RES_X = optimization_dictionary['RES_X']
   RES_Y = optimization_dictionary['RES_Y']
   pn_c  = optimization_dictionary['pn_c']
@@ -162,6 +160,8 @@ def objective_one_frame(x, optimization_dictionary):
   #   error_CD     = depth_hat_CD  - depth_gt
   #   error_buf_CD = depth_hat_buf - depth_gt_buf_CD
 
+  end = time.time()
+  # print('one', end-start)
   return error.flatten()
 
 # TODO optimize C and D?
@@ -171,24 +171,28 @@ def optimize_intrinsics(optimization_dictionaries, N):
 
   with Pool(multiprocessing.cpu_count()) as p:
     def objective(x):
+      start = time.time()
       residuals = []
 
       args = [(x, d) for d in optimization_dictionaries_decimated]
-
       residuals = p.starmap(objective_one_frame, args)
       # residuals = [objective_one_frame(*a) for a in args]
+      mid = time.time()
 
       residuals = np.array(residuals).flatten()
+      end = time.time()
+      # print(mid-start, end-start)
+
       return residuals
 
     # x0 = np.array([cam_K[0, 0], cam_K[1,1], cam_K[0, 2], cam_K[1, 2]])
     x0 = optimization_dictionaries[0]['intrinsics']
-    result = scipy.optimize.least_squares(objective, x0=x0)
+    result = scipy.optimize.least_squares(objective, x0=x0, verbose=2)
   print(result)
-  print(result.x - x0, result.x, x0)
+  print('delta intrinsics', result.x - x0)
   return result.x
 
-def collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d):
+def collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d, random_angle):
   scn = mujoco.MjvScene(m, maxgeom=100)
 
   # Turn on segmented rendering
@@ -229,12 +233,10 @@ def collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d
   # https://www.lighthouse3d.com/tutorials/glsl-tutorial/rasterization-and-interpolation
 
   if intrinsics is None:
-    # These 0.125's are close to what the intrinsics optimization usually returns
-    # Adding them makes the initial optimization much faster
-    fy = (RES_Y/2) / np.tan(yfov * np.pi / 180 / 2) - 0.00125
-    fx = fy - 0.00125
-    cx = (RES_X - 1) / 2.0 - 0.5 + 0.125
-    cy = (RES_Y - 1) / 2.0 - 0.5 + 0.125
+    fy = (RES_Y/2) / np.tan(yfov * np.pi / 180 / 2)
+    fx = fy
+    cx = (RES_X - 1) / 2.0 - 0.5
+    cy = (RES_Y - 1) / 2.0 - 0.5
   else:
     fx, fy, cx, cy = intrinsics
   cam_K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
@@ -423,6 +425,7 @@ def collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d
         ])
 
     mujoco.mj_step(m, d)
+    # time.sleep(0.5)
 
     if view is not None:
       view.sync()
@@ -436,7 +439,16 @@ def collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d
     # next_target_depth = z_target_max
     d.mocap_pos[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][1] = next_target_depth
 
-    next_q_wp = R.from_rotvec(np.array([1.0, 1.0, 0.0]) * 30 * np.pi / 180.0).as_quat()
+    if random_angle:
+      rot_x = random.uniform(-1.0, 1.0)
+      rot_y = random.uniform( 0.0, 1.0)
+      angle = random.uniform(-30.0, 30.0)
+    else:
+      rot_x = 1.0
+      rot_y = 1.0
+      angle = 30.0
+
+    next_q_wp = R.from_rotvec(np.array([rot_x, rot_y, 0.0]) * angle * np.pi / 180.0).as_quat()
     d.mocap_quat[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][0]   = next_q_wp[3]
     d.mocap_quat[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][1:4] = next_q_wp[0:3]
 
@@ -457,21 +469,27 @@ def run_test(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name):
   gl_ctx.make_current()
 
   view = viewer.launch_passive(m, d)
-  errors, optimization_dictionaries = collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d)
+  random.seed(None) # Use system time as seed for data (random training set)
+  errors, optimization_dictionaries = collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d, random_angle=True)
   view.close()
 
   new_intrinsics = optimize_intrinsics(optimization_dictionaries, 10)
 
   d = mujoco.MjData(m)
   view = viewer.launch_passive(m, d)
-  new_errors, new_optimization_dictionaries = collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, new_intrinsics, view, m, d)
+  random.seed(0) # Seed random angle with 0 (non random test set, which will be the same for all versions of z buffer)
+  new_errors, new_optimization_dictionaries = collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, new_intrinsics, view, m, d, random_angle=True)
   view.close()
 
-  optimize_intrinsics(new_optimization_dictionaries, 10)
+  # Optimize intrinsics again if you want to verify that
+  # changing the data didn't change the intrinsics much
+  # optimize_intrinsics(new_optimization_dictionaries, 10)
 
   np.savez(save_name, **new_errors)
 
+  plt.figure()
   plot_errors(errors)
+  plt.figure()
   plot_errors(new_errors)
   plt.show()
 
