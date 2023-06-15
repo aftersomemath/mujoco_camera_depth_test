@@ -57,9 +57,85 @@ def ogl_zbuf_negz_inv(zbuf, znear=None, zfar=None, C=None, D=None):
   zlinear = ogl_zbuf_projection_inverse(zbuf, C, D)
   return zlinear
 
-def depth_on_control(m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_over_z, cam_y_over_z, sample_list,
-                     ogl_zbuf=None, ogz_zbuf_inv=None, z_max_buf=None, C=None, D=None):
-  try:
+def run_test(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D):
+  m = mujoco.MjModel.from_xml_path('./camera_depth_test.xml')
+  d = mujoco.MjData(m)
+
+  view = viewer.launch_passive(m, d)
+
+  gl_ctx = mujoco.GLContext(RES_X, RES_Y)
+  gl_ctx.make_current()
+
+  scn = mujoco.MjvScene(m, maxgeom=100)
+
+  # Turn on segmented rendering
+  scn.flags[mujoco.mjtRndFlag.mjRND_SEGMENT] = 1
+  scn.flags[mujoco.mjtRndFlag.mjRND_IDCOLOR] = 1
+
+  cam = mujoco.MjvCamera()
+  cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+  cam.fixedcamid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_CAMERA, 'cam')
+
+  vopt = mujoco.MjvOption()
+  pert = mujoco.MjvPerturb()
+
+  ctx = mujoco.MjrContext(m, mujoco.mjtFontScale.mjFONTSCALE_150)
+  mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, ctx)
+
+  viewport = mujoco.MjrRect(0, 0, RES_X, RES_Y)
+
+  yfov = m.cam_fovy[cam.fixedcamid]
+
+  # Get the center pixel right
+  # Currently can't explain the extra -0.5 pixel offset
+  # this article might be relevant, but after working it through
+  # I still get that the -0.5 offset should not be helping as it is (3-4x more accurate with offset)
+  # https://www.realtimerendering.com/blog/the-center-of-the-pixel-is-0-50-5/#:~:text=OpenGL%20has%20always%20considered%20the,the%20program%20with%20DirectX%2010.
+  # https://lmb.informatik.uni-freiburg.de/people/reisert/opengl/doc/glFrustum.html
+  # https://registry.khronos.org/OpenGL-Refpages/gl4/html/glViewport.xhtml
+  # https://stackoverflow.com/a/25468051
+  # https://community.khronos.org/t/multisampled-depth-renderbuffer/55751/8
+  # https://www.khronos.org/opengl/wiki/Fragment_Shader#System_inputs
+  # khronos.org/opengl/wiki/Type_Qualifier_(GLSL)#Interpolation_qualifiers
+  # https://registry.khronos.org/OpenGL-Refpages/gl4/html/gl_SamplePosition.xhtml
+  # "When rendering to a non-multisample buffer, or if multisample rasterization is disabled, gl_SamplePosition will be (0.5, 0.5)."
+  # https://community.amd.com/t5/archives-discussions/how-depth-is-interpolated-in-rasterizer-linear-depth-instead-of/td-p/390440
+  # https://nlguillemot.wordpress.com/2016/12/07/reversed-z-in-opengl/
+  # http://www.humus.name/Articles/Persson_CreatingVastGameWorlds.pdf
+  # https://developer.nvidia.com/content/depth-precision-visualized
+  # https://www.lighthouse3d.com/tutorials/glsl-tutorial/rasterization-and-interpolation
+
+  fy = (RES_Y/2) / np.tan(yfov * np.pi / 180 / 2)
+  fx = fy
+  cx = (RES_X - 1) / 2.0 - 0.5 # Check this??
+  cy = (RES_Y - 1) / 2.0 - 0.5
+  cam_K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+
+  # Debugging, build cam_x_over_z and cam_y_over_z from perspective matrix?
+  # camProject
+  # 1.3579951525e+00 0.0000000000e+00 0.0000000000e+00 0.0000000000e+00 
+  # 0.0000000000e+00 2.4142136574e+00 0.0000000000e+00 0.0000000000e+00 
+  # 0.0000000000e+00 0.0000000000e+00 5.0250887871e-03 -1.0000000000e+00 
+  # 0.0000000000e+00 0.0000000000e+00 1.1471571028e-01 0.0000000000e+00
+
+  # Get the 3D direction vector for each pixel in the simulated sensor
+  # in the format (x, y, 1)
+  cam_x_over_z, cam_y_over_z = cv2.initInverseRectificationMap(
+          cam_K, # Intrinsics
+          None, # Distortion (0 for GPU rendered images)
+          np.eye(3), # Rectification
+          np.eye(3), # Unity rectification intrinsics (we want direction vector)
+          (RES_X, RES_Y), # Test all pixels in physical sensor
+          m1type=cv2.CV_32FC1)
+  cam_x_over_z = cam_x_over_z.astype(np.float64)
+  cam_y_over_z = cam_y_over_z.astype(np.float64)
+
+  sample_list = []
+
+  while True and view.is_running():
+    mujoco.mj_step(m, d)
+    view.sync()
+
     test_pix = (int(RES_Y/2), int(RES_X/2))
 
     # Render the simulated camera
@@ -74,18 +150,19 @@ def depth_on_control(m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_ov
     # Check XML reference, choice of zfar and znear can have big effect on accuracy
     zfar  = m.vis.map.zfar * m.stat.extent
     znear = m.vis.map.znear * m.stat.extent
-    z_target_max = ogz_zbuf_inv(z_max_buf, znear, zfar) # Accuracy degrades rapidly after the values in the Z buffer reach a certain point
+    z_target_max = ogl_zbuf_inv(z_max_buf, znear, zfar) # Accuracy degrades rapidly after the values in the Z buffer reach a certain point
 
     # Show the simulated camera image
     # cv2.imshow('image', image / np.max(image)) # the color corresponds with the id
+    # cv2.waitKey(1)
 
     if d.time > 0.0:
       depth = depth.astype(np.float64)
       depth_hat_buf = depth[test_pix]
-      depth_linear    = ogz_zbuf_inv(depth, znear, zfar)
+      depth_linear    = ogl_zbuf_inv(depth, znear, zfar)
       depth_hat = depth_linear[test_pix] # Center of screen
       if C is not None:
-        depth_linear_CD = ogz_zbuf_inv(depth, C=C, D=D)
+        depth_linear_CD = ogl_zbuf_inv(depth, C=C, D=D)
         depth_hat_CD = depth_linear_CD[test_pix]
 
       # For visualization
@@ -200,102 +277,8 @@ def depth_on_control(m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_ov
     d.mocap_quat[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][0]   = next_q_wp[3]
     d.mocap_quat[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][1:4] = next_q_wp[0:3]
 
-    # cloud_id = int(d.time / m.opt.timestep)
-    # cloud_file_name = 'cloud_{:06d}.npy'.format(cloud_id)
-    # np.save(cloud_file_name, p)
-
-  except Exception as e:
-    traceback.print_exc()
-    print(e)
-    raise e
-
-def load_callback(m=None, d=None, ogl_zbuf=None, ogl_zbuf_inv=None, z_max_buf=None, C=None, D=None):
-  # Clear the control callback before loading a new model
-  # or a Python exception is raised
-  mujoco.set_mjcb_control(None)
-
-  m = mujoco.MjModel.from_xml_path('./camera_depth_test.xml')
-  d = mujoco.MjData(m)
-
-  if m is not None:
-    # Make all the things needed to render a simulated camera
-    gl_ctx = mujoco.GLContext(RES_X, RES_Y)
-    gl_ctx.make_current()
-
-    scn = mujoco.MjvScene(m, maxgeom=100)
-
-    # Turn on segmented rendering
-    scn.flags[mujoco.mjtRndFlag.mjRND_SEGMENT] = 1
-    scn.flags[mujoco.mjtRndFlag.mjRND_IDCOLOR] = 1
-
-    cam = mujoco.MjvCamera()
-    cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
-    cam.fixedcamid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_CAMERA, 'cam')
-
-    vopt = mujoco.MjvOption()
-    pert = mujoco.MjvPerturb()
-
-    ctx = mujoco.MjrContext(m, mujoco.mjtFontScale.mjFONTSCALE_150)
-    mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, ctx)
-
-    viewport = mujoco.MjrRect(0, 0, RES_X, RES_Y)
-
-    yfov = m.cam_fovy[cam.fixedcamid]
-
-
-    # Get the center pixel right
-    # Currently can't explain the extra -0.5 pixel offset
-    # this article might be relevant, but after working it through
-    # I still get that the -0.5 offset should not be helping as it is (3-4x more accurate with offset)
-    # https://www.realtimerendering.com/blog/the-center-of-the-pixel-is-0-50-5/#:~:text=OpenGL%20has%20always%20considered%20the,the%20program%20with%20DirectX%2010.
-    # https://lmb.informatik.uni-freiburg.de/people/reisert/opengl/doc/glFrustum.html
-    # https://registry.khronos.org/OpenGL-Refpages/gl4/html/glViewport.xhtml
-    # https://stackoverflow.com/a/25468051
-    # https://community.khronos.org/t/multisampled-depth-renderbuffer/55751/8
-    # https://www.khronos.org/opengl/wiki/Fragment_Shader#System_inputs
-    # khronos.org/opengl/wiki/Type_Qualifier_(GLSL)#Interpolation_qualifiers
-    # https://registry.khronos.org/OpenGL-Refpages/gl4/html/gl_SamplePosition.xhtml
-    # "When rendering to a non-multisample buffer, or if multisample rasterization is disabled, gl_SamplePosition will be (0.5, 0.5)."
-    # https://community.amd.com/t5/archives-discussions/how-depth-is-interpolated-in-rasterizer-linear-depth-instead-of/td-p/390440
-    # https://nlguillemot.wordpress.com/2016/12/07/reversed-z-in-opengl/
-    # http://www.humus.name/Articles/Persson_CreatingVastGameWorlds.pdf
-    # https://developer.nvidia.com/content/depth-precision-visualized
-    # https://www.lighthouse3d.com/tutorials/glsl-tutorial/rasterization-and-interpolation
-
-    fy = (RES_Y/2) / np.tan(yfov * np.pi / 180 / 2)
-    fx = fy
-    cx = (RES_X - 1) / 2.0 - 0.5 # Check this??
-    cy = (RES_Y - 1) / 2.0 - 0.5
-    cam_K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
-
-    # Debugging, build cam_x_over_z and cam_y_over_z from perspective matrix?
-    # camProject
-    # 1.3579951525e+00 0.0000000000e+00 0.0000000000e+00 0.0000000000e+00 
-    # 0.0000000000e+00 2.4142136574e+00 0.0000000000e+00 0.0000000000e+00 
-    # 0.0000000000e+00 0.0000000000e+00 5.0250887871e-03 -1.0000000000e+00 
-    # 0.0000000000e+00 0.0000000000e+00 1.1471571028e-01 0.0000000000e+00
-
-    # Get the 3D direction vector for each pixel in the simulated sensor
-    # in the format (x, y, 1)
-    cam_x_over_z, cam_y_over_z = cv2.initInverseRectificationMap(
-            cam_K, # Intrinsics
-            None, # Distortion (0 for GPU rendered images)
-            np.eye(3), # Rectification
-            np.eye(3), # Unity rectification intrinsics (we want direction vector)
-            (RES_X, RES_Y), # Test all pixels in physical sensor
-            m1type=cv2.CV_32FC1)
-    cam_x_over_z = cam_x_over_z.astype(np.float64)
-    cam_y_over_z = cam_y_over_z.astype(np.float64)
-
-    sample_list = []
-
-    # Set the callback and capture all variables needed for rendering
-    mujoco.set_mjcb_control(
-      lambda m, d: depth_on_control(
-        m, d, gl_ctx, scn, cam, vopt, pert, ctx, viewport, cam_x_over_z, cam_y_over_z, sample_list,
-        ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D))
-
-  return m , d
+  # End test
+  view.close()
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
@@ -319,4 +302,4 @@ if __name__ == '__main__':
   else:
     raise Exception('Unrecognized z_buf_type')
 
-  viewer.launch(loader=lambda m=None, d=None: load_callback(m, d, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D))
+  run_test(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D)
