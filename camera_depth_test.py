@@ -204,8 +204,8 @@ def collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d
   if intrinsics is None:
     fy = (RES_Y/2) / np.tan(yfov * np.pi / 180 / 2)
     fx = fy
-    cx = (RES_X - 1) / 2.0 - 0.5
-    cy = (RES_Y - 1) / 2.0 - 0.5
+    cx = (RES_X - 1) / 2.0 + 0.125       # These offsets are very close to what the optimization returns when using
+    cy = (RES_Y - 1) / 2.0 - 0.5 + 0.125 # a float32 reversed Z buffer, 24 bit non reversed results in different offsets
   else:
     fx, fy, cx, cy = intrinsics
 
@@ -229,7 +229,15 @@ def collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d
 
   optimization_dictionaries = []
 
-  while True and view.is_running():
+  # Check XML reference, choice of zfar and znear can have big effect on accuracy
+  zfar  = m.vis.map.zfar * m.stat.extent
+  znear = m.vis.map.znear * m.stat.extent
+  z_target_max = ogl_zbuf_inv(z_max_buf, znear, zfar)
+
+  while True:
+    if view is not None and not view.is_running():
+      break
+
     # Render the simulated camera
     mujoco.mjv_updateScene(m, d, vopt, pert, cam, mujoco.mjtCatBit.mjCAT_ALL, scn)
     mujoco.mjr_render(viewport, scn, ctx)
@@ -249,17 +257,12 @@ def collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d
           target_mujoco_id = vgeom.segid
     assert target_mujoco_id is not None
 
-    target_pixels = image[:, :, 0] == target_mujoco_id + 1
-    # cv2.imshow('target_pixels', target_pixels.astype(np.uint8) * 255)
-    # cv2.waitKey(1)
-    assert np.all(target_pixels)
-
-    # Check XML reference, choice of zfar and znear can have big effect on accuracy
-    zfar  = m.vis.map.zfar * m.stat.extent
-    znear = m.vis.map.znear * m.stat.extent
-    z_target_max = ogl_zbuf_inv(z_max_buf, znear, zfar)
-
     if d.time > 0.0:
+      target_pixels = image[:, :, 0] == target_mujoco_id + 1
+      # cv2.imshow('target_pixels', target_pixels.astype(np.uint8) * 255)
+      # cv2.waitKey(1)
+      assert np.all(target_pixels)
+
       depth_hat_buf = depth_hat_buf.astype(np.float64)
       depth_hat = ogl_zbuf_inv(depth_hat_buf, znear, zfar)
       if C is not None:
@@ -424,25 +427,32 @@ def collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d
 
   return errors, optimization_dictionaries
 
-def run_test(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name):
+def run_test(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, use_viewer):
   m = mujoco.MjModel.from_xml_path('./camera_depth_test.xml')
   d = mujoco.MjData(m)
 
   gl_ctx = mujoco.GLContext(RES_X, RES_Y)
   gl_ctx.make_current()
 
-  view = viewer.launch_passive(m, d)
+  if use_viewer:
+    view = viewer.launch_passive(m, d)
+  else:
+    view = None
+
   random.seed(None) # Use system time as seed for data (random training set)
   errors, optimization_dictionaries = collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d, random_angle=True)
-  view.close()
+  if view:
+    view.close()
 
-  new_intrinsics = optimize_intrinsics(optimization_dictionaries, 10)
+  new_intrinsics = optimize_intrinsics(optimization_dictionaries, 20) # TODO parameter
 
   d = mujoco.MjData(m)
-  view = viewer.launch_passive(m, d)
+  if use_viewer:
+    view = viewer.launch_passive(m, d)
   random.seed(0) # Seed random angle with 0 (non random test set, which will be the same for all versions of z buffer)
   new_errors, new_optimization_dictionaries = collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, new_intrinsics, view, m, d, random_angle=True)
-  view.close()
+  if view:
+    view.close()
 
   # Optimize intrinsics again if you want to verify that
   # changing the data didn't change the intrinsics much
@@ -462,6 +472,7 @@ if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--z_buf_type', type=str, help='ogl_default, ogl_negz')
   parser.add_argument('--plot', action='store_true')
+  parser.add_argument('--viewer', action='store_true')
   args = parser.parse_args()
 
   if args.plot:
@@ -489,4 +500,4 @@ if __name__ == '__main__':
     else:
       raise Exception('Unrecognized z_buf_type')
 
-    run_test(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name)
+    run_test(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer)
