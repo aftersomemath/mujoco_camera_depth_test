@@ -7,7 +7,7 @@ import random
 import time
 import traceback
 
-import cv2
+# import cv2
 import mujoco
 import mujoco.viewer as viewer
 import numpy as np
@@ -15,9 +15,6 @@ from scipy.spatial.transform import Rotation as R
 
 import matplotlib.pyplot as plt
 import scipy
-
-import multiprocessing
-from multiprocessing import Pool
 
 # TODO read these from mjModel
 RES_X = 1280
@@ -117,51 +114,12 @@ def plot_errors_all():
   plt.legend(files)
   plt.show()
 
-def objective_one_frame(x, optimization_dictionary):
-  start = time.time()
-  RES_X = optimization_dictionary['RES_X']
-  RES_Y = optimization_dictionary['RES_Y']
-  pn_c  = optimization_dictionary['pn_c']
-  n_c   = optimization_dictionary['n_c']
-  znear = optimization_dictionary['znear']
-  zfar  = optimization_dictionary['zfar']
-  depth_hat     = optimization_dictionary['depth_hat']
-  # depth_hat_buf = optimization_dictionary['depth_hat_buf']
-
-  if 'C' in optimization_dictionary:
-    C = optimization_dictionary['C']
-    D = optimization_dictionary['D']
-  else:
-    C = None
-    D = None
-
-  fx, fy, cx, cy = x
-  cam_K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
-
-  cam_x_over_z, cam_y_over_z = cv2.initInverseRectificationMap(
-          cam_K, # Intrinsics
-          None, # Distortion (0 for GPU rendered images)
-          np.eye(3), # Rectification
-          np.eye(3), # Unity rectification intrinsics (we want direction vector)
-          (RES_X, RES_Y), # Test all pixels in physical sensor
-          m1type=cv2.CV_32FC1)
-  cam_x_over_z = cam_x_over_z.astype(np.float64)
-  cam_y_over_z = cam_y_over_z.astype(np.float64)
-
+def objective_one_frame(cam_x_over_z, cam_y_over_z, optimization_dictionary):
+  pn_c      = optimization_dictionary['pn_c']
+  n_c       = optimization_dictionary['n_c']
+  depth_hat = optimization_dictionary['depth_hat']
   depth_gt = (pn_c.T @ n_c) / (n_c[0] * cam_x_over_z + n_c[1] * cam_y_over_z + n_c[2])
-  depth_gt_buf = ogl_zbuf(depth_gt, znear, zfar)
-  # if C is not None:
-  #   depth_gt_buf_CD = ogl_zbuf(depth_gt, C=C, D=D)
-
-  # Assume all pixels on target
-  error     = depth_hat    - depth_gt
-  # error_buf = depth_hat_buf - depth_gt_buf
-  # if C is not None:
-  #   error_CD     = depth_hat_CD  - depth_gt
-  #   error_buf_CD = depth_hat_buf - depth_gt_buf_CD
-
-  end = time.time()
-  # print('one', end-start)
+  error     = depth_hat - depth_gt
   return error.flatten()
 
 # TODO optimize C and D?
@@ -169,25 +127,36 @@ def optimize_intrinsics(optimization_dictionaries, N):
   args_i = np.round(np.linspace(0, len(optimization_dictionaries)-1, N)).astype(np.int64)
   optimization_dictionaries_decimated = [optimization_dictionaries[i] for i in args_i]
 
-  with Pool(multiprocessing.cpu_count()) as p:
-    def objective(x):
-      start = time.time()
-      residuals = []
+  RES_X = optimization_dictionaries_decimated[0]['RES_X']
+  RES_Y = optimization_dictionaries_decimated[0]['RES_Y']
+  x0    = optimization_dictionaries_decimated[0]['intrinsics']
 
-      args = [(x, d) for d in optimization_dictionaries_decimated]
-      residuals = p.starmap(objective_one_frame, args)
-      # residuals = [objective_one_frame(*a) for a in args]
-      mid = time.time()
+  x = np.arange(0, RES_X)
+  y = np.arange(0, RES_Y)
+  xx, yy = np.meshgrid(x, y)
+  xx_yy_one = np.dstack((xx, yy, np.ones((RES_Y, RES_X))))
+  def objective(x):
+    fx, fy, cx, cy = x
+    cam_K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+    cam_K_inv = np.linalg.inv(cam_K)
 
-      residuals = np.array(residuals).flatten()
-      end = time.time()
-      # print(mid-start, end-start)
+    cam_p_over_z = ((cam_K_inv @ xx_yy_one.reshape((-1, 3)).T).T).reshape((720, 1280, 3))
+    cam_x_over_z = cam_p_over_z[:, :, 0]
+    cam_y_over_z = cam_p_over_z[:, :, 1]
 
-      return residuals
+    residuals = []
+    for optimization_dictionary in optimization_dictionaries_decimated:
+      pn_c      = optimization_dictionary['pn_c']
+      n_c       = optimization_dictionary['n_c']
+      depth_hat = optimization_dictionary['depth_hat']
+      depth_gt = (pn_c.T @ n_c) / (n_c[0] * cam_x_over_z + n_c[1] * cam_y_over_z + n_c[2])
+      error     = depth_hat - depth_gt
+      residuals.append(error.flatten())
 
-    # x0 = np.array([cam_K[0, 0], cam_K[1,1], cam_K[0, 2], cam_K[1, 2]])
-    x0 = optimization_dictionaries[0]['intrinsics']
-    result = scipy.optimize.least_squares(objective, x0=x0, verbose=2)
+    residuals = np.concatenate(residuals)
+    return residuals
+
+  result = scipy.optimize.least_squares(objective, x0=x0, verbose=2)
   print(result)
   print('delta intrinsics', result.x - x0)
   return result.x
@@ -239,19 +208,16 @@ def collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d
     cy = (RES_Y - 1) / 2.0 - 0.5
   else:
     fx, fy, cx, cy = intrinsics
-  cam_K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
 
-  # Get the 3D direction vector for each pixel in the simulated sensor
-  # in the format (x, y, 1)
-  cam_x_over_z, cam_y_over_z = cv2.initInverseRectificationMap(
-          cam_K, # Intrinsics
-          None, # Distortion (0 for GPU rendered images)
-          np.eye(3), # Rectification
-          np.eye(3), # Unity rectification intrinsics (we want direction vector)
-          (RES_X, RES_Y), # Test all pixels in physical sensor
-          m1type=cv2.CV_32FC1)
-  cam_x_over_z = cam_x_over_z.astype(np.float64)
-  cam_y_over_z = cam_y_over_z.astype(np.float64)
+  x = np.arange(0, RES_X)
+  y = np.arange(0, RES_Y)
+  xx, yy = np.meshgrid(x, y)
+  xx_yy_one = np.dstack((xx, yy, np.ones((RES_Y, RES_X))))
+  cam_K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+  cam_K_inv = np.linalg.inv(cam_K)
+  cam_p_over_z = ((cam_K_inv @ xx_yy_one.reshape((-1, 3)).T).T).reshape((720, 1280, 3))
+  cam_x_over_z = cam_p_over_z[:, :, 0]
+  cam_y_over_z = cam_p_over_z[:, :, 1]
 
   sample_list = []
 
@@ -271,8 +237,9 @@ def collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d
     depth_hat_buf = np.empty((RES_Y, RES_X, 1),    dtype=np.float32)
     mujoco.mjr_readPixels(image, depth_hat_buf, viewport, ctx)
 
-    image = cv2.flip(image, 0) # OpenGL renders with inverted y axis
-    depth_hat_buf = cv2.flip(depth_hat_buf, 0) # OpenGL renders with inverted y axis
+    # OpenGL renders with inverted y axis
+    image         = np.flip(image, axis=0).squeeze()
+    depth_hat_buf = np.flip(depth_hat_buf, axis=0).squeeze()
 
     target_mujoco_id = None
     for vgeom in scn.geoms:
@@ -290,11 +257,7 @@ def collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d
     # Check XML reference, choice of zfar and znear can have big effect on accuracy
     zfar  = m.vis.map.zfar * m.stat.extent
     znear = m.vis.map.znear * m.stat.extent
-    z_target_max = ogl_zbuf_inv(z_max_buf, znear, zfar) # Accuracy degrades rapidly after the values in the Z buffer reach a certain point
-
-    # Show the simulated camera image
-    # cv2.imshow('image', image / np.max(image)) # the color corresponds with the id
-    # cv2.waitKey(1)
+    z_target_max = ogl_zbuf_inv(z_max_buf, znear, zfar)
 
     if d.time > 0.0:
       depth_hat_buf = depth_hat_buf.astype(np.float64)
@@ -303,8 +266,8 @@ def collect_data(ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d
         depth_hat_CD = ogl_zbuf_inv(depth_hat_buf, C=C, D=D)
 
       # For visualization
-      # depth_linear[depth_linear > m.vis.map.zfar - 0.0005] = 0 # Zero out depths farther than the z buffer
-      # cv2.imshow('depth', depth_linear / np.max(depth_linear))
+      # cv2.imshow('depth', depth_hat / np.max(depth_hat))
+      # cv2.waitKey(1)
 
       # # Save off some pointclouds for visualization later
       # p_X = cam_x_over_z * depth_linear
@@ -504,8 +467,6 @@ if __name__ == '__main__':
   if args.plot:
     plot_errors_all()
   else:
-    cv2.setNumThreads(1)
-
     # Accuracy degrades rapidly after the values in the Z buffer reach a certain point
     # Choose this at your discretion
     z_max_buf_negz = (0.0035 / 2) + (0.0035 / 4) + (0.0035 / 8)
