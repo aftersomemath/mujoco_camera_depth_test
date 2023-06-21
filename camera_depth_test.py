@@ -162,23 +162,27 @@ def optimize_intrinsics(optimization_dictionaries, N):
   return result.x
 
 def collect_data(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d, random_angle):
-  scn = mujoco.MjvScene(m, maxgeom=100)
+  print(depth_mapping, depth_precision)
+  renderer = mujoco.Renderer(m, height=RES_Y, width=RES_X,
+                             depth_mapping=depth_mapping, depth_precision=depth_precision)
+
+  # scn = mujoco.MjvScene(m, maxgeom=100)
 
   # Turn on segmented rendering
-  scn.flags[mujoco.mjtRndFlag.mjRND_SEGMENT] = 1
-  scn.flags[mujoco.mjtRndFlag.mjRND_IDCOLOR] = 1
+  # scn.flags[mujoco.mjtRndFlag.mjRND_SEGMENT] = 1
+  # scn.flags[mujoco.mjtRndFlag.mjRND_IDCOLOR] = 1
 
   cam = mujoco.MjvCamera()
   cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
   cam.fixedcamid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_CAMERA, 'cam')
 
-  vopt = mujoco.MjvOption()
-  pert = mujoco.MjvPerturb()
+  # vopt = mujoco.MjvOption()
+  # pert = mujoco.MjvPerturb()
 
-  ctx = mujoco.MjrContext(m, mujoco.mjtFontScale.mjFONTSCALE_150, depth_mapping, depth_precision)
-  mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, ctx)
+  # ctx = mujoco.MjrContext(m, mujoco.mjtFontScale.mjFONTSCALE_150, depth_mapping, depth_precision)
+  # mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, ctx)
 
-  viewport = mujoco.MjrRect(0, 0, RES_X, RES_Y)
+  # viewport = mujoco.MjrRect(0, 0, RES_X, RES_Y)
 
   yfov = m.cam_fovy[cam.fixedcamid]
 
@@ -239,34 +243,63 @@ def collect_data(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_b
       break
 
     # Render the simulated camera
-    mujoco.mjv_updateScene(m, d, vopt, pert, cam, mujoco.mjtCatBit.mjCAT_ALL, scn)
-    mujoco.mjr_render(viewport, scn, ctx)
-    image = np.empty((RES_Y, RES_X, 3), dtype=np.uint8)
-    depth_hat_buf = np.empty((RES_Y, RES_X, 1),    dtype=np.float32)
-    mujoco.mjr_readPixels(image, depth_hat_buf, viewport, ctx)
+    # mujoco.mjv_updateScene(m, d, vopt, pert, cam, mujoco.mjtCatBit.mjCAT_ALL, scn)
+    # mujoco.mjr_render(viewport, scn, ctx)
+    # image = np.empty((RES_Y, RES_X, 3), dtype=np.uint8)
+    # depth_hat_buf = np.empty((RES_Y, RES_X, 1),    dtype=np.float32)
+    # mujoco.mjr_readPixels(image, depth_hat_buf, viewport, ctx)
 
-    # OpenGL renders with inverted y axis
-    image         = np.flip(image, axis=0).squeeze()
-    depth_hat_buf = np.flip(depth_hat_buf, axis=0).squeeze()
+    # # OpenGL renders with inverted y axis
+    # image         = np.flip(image, axis=0).squeeze()
+    # depth_hat_buf = np.flip(depth_hat_buf, axis=0).squeeze()
 
-    target_mujoco_id = None
-    for vgeom in scn.geoms:
-      if vgeom.objtype == mujoco.mjtObj.mjOBJ_GEOM:
-        name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM,vgeom.objid)
-        if name == 'target':
-          target_mujoco_id = vgeom.segid
-    assert target_mujoco_id is not None
+    # start = time.time()
+    renderer.update_scene(d, cam)
 
+    renderer.disable_depth_rendering()
+    renderer.enable_segmentation_rendering()
+    image = renderer.render()
+
+    renderer.enable_depth_rendering()
+    renderer.disable_segmentation_rendering()
+    depth_hat = renderer.render()
+
+    # assert False
+
+    # target_mujoco_id = None
+    # for vgeom in scn.geoms:
+    #   if vgeom.objtype == mujoco.mjtObj.mjOBJ_GEOM:
+    #     name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM,vgeom.objid)
+    #     if name == 'target':
+    #       target_mujoco_id = vgeom.segid
+    # assert target_mujoco_id is not None
+
+    target_geom = m.geom('target')
     if d.time > 0.0:
-      target_pixels = image[:, :, 0] == target_mujoco_id + 1
+      # target_pixels = image[:, :, 0] == target_mujoco_id + 1
+      # print(image.dtype)
+
+      # print(target_geom)
+      # print(target_geom.id, image[:, :, 0])
+
+      # print(mujoco.mjtObj.mjOBJ_GEOM, image[:, :, 1])
+
+      # print(depth_hat)
+      # print(depth_hat.shape, depth_hat.dtype)
+
+      # mid = time.time()
+      target_pixels = np.logical_and(image[:, :, 0] == target_geom.id, image[:, :, 1] == mujoco.mjtObj.mjOBJ_GEOM.value)
+
       # cv2.imshow('target_pixels', target_pixels.astype(np.uint8) * 255)
       # cv2.waitKey(1)
       assert np.all(target_pixels)
+      # end = time.time()
+      # print(end - start, end-mid)
 
-      depth_hat_buf = depth_hat_buf.astype(np.float64)
-      depth_hat = ogl_zbuf_inv(depth_hat_buf, znear, zfar)
-      if C is not None:
-        depth_hat_CD = ogl_zbuf_inv(depth_hat_buf, C=C, D=D)
+      # depth_hat_buf = depth_hat_buf.astype(np.float64)
+      # depth_hat = ogl_zbuf_inv(depth_hat_buf, znear, zfar)
+      # if C is not None:
+      #   depth_hat_CD = ogl_zbuf_inv(depth_hat_buf, C=C, D=D)
 
       # For visualization
       # cv2.imshow('depth', depth_hat / np.max(depth_hat))
@@ -348,10 +381,11 @@ def collect_data(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_b
       
       # Assume all pixels on target
       error     = depth_hat    - depth_gt
-      error_buf = depth_hat_buf - depth_gt_buf
+      # print(np.linalg.norm(error))
+      # error_buf = depth_hat_buf - depth_gt_buf
       if C is not None:
         error_CD     = depth_hat_CD  - depth_gt
-        error_buf_CD = depth_hat_buf - depth_gt_buf_CD
+        # error_buf_CD = depth_hat_buf - depth_gt_buf_CD
 
       abs_error = np.abs(error)
       error_list.append([
@@ -362,14 +396,14 @@ def collect_data(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_b
         np.max (abs_error),
       ])
 
-      abs_error_buf = np.abs(error_buf)
-      error_buf_list.append([
-        d.mocap_pos[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][1],
-        np.mean(error_buf),
-        np.std (error_buf),
-        np.min (abs_error_buf),
-        np.max (abs_error_buf),
-      ])
+      # abs_error_buf = np.abs(error_buf)
+      # error_buf_list.append([
+      #   d.mocap_pos[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][1],
+      #   np.mean(error_buf),
+      #   np.std (error_buf),
+      #   np.min (abs_error_buf),
+      #   np.max (abs_error_buf),
+      # ])
 
       if C is not None:
         abs_error_CD = np.abs(error_CD)
@@ -468,6 +502,7 @@ if __name__ == '__main__':
   args = parser.parse_args()
 
   z_max_buf_negz = (0.0035 / 2) + (0.0035 / 4) + (0.0035 / 8)
+  z_max_buf_negz += 0.002
 
   # mjDB_NEGONETOONE, mjDB_INT24
   depth_mapping =  mujoco.mjtDepthMapping.mjDB_NEGONETOONE
