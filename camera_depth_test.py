@@ -111,7 +111,9 @@ def plot_errors_all():
   plt.figure()
   for f in files:
     plot_errors(np.load(f))
-  plt.legend(files)
+
+  legend = [f[7:-13] for f in files]
+  plt.legend(legend)
   plt.show()
 
 def objective_one_frame(cam_x_over_z, cam_y_over_z, optimization_dictionary):
@@ -486,68 +488,66 @@ def run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, 
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  #parser.add_argument('--z_buf_type', type=str, help='ogl_default, ogl_negz')
   parser.add_argument('--plot', action='store_true')
   parser.add_argument('--viewer', action='store_true')
-  # parser.add_argument('--use_renderer', action='store_true')
+  parser.add_argument('--use_renderer', action='store_true')
   args = parser.parse_args()
 
   z_max_buf_negz = (0.0035 / 2) + (0.0035 / 4) + (0.0035 / 8)
-  # z_max_buf_negz += 0.002
 
   if not args.plot:
-    for use_renderer in [True, False]:
-      if use_renderer:
-        postfix = '_renderer'
-      else:
-        postfix = ''
+    use_renderer = args.use_renderer
+    if use_renderer:
+      postfix = '_renderer'
+    else:
+      postfix = ''
 
-      # mjDB_NEGONETOONE, mjDB_INT24
-      depth_mapping =  mujoco.mjtDepthMapping.mjDB_NEGONETOONE
-      depth_precision = mujoco.mjtDepthPrecision.mjDB_INT24
-      ogl_zbuf     = ogl_zbuf_default
-      ogl_zbuf_inv = ogl_zbuf_default_inv
-      z_max_buf = 1.0 - z_max_buf_negz
-      C = None #-1.0080322027e+00
-      D = None #-2.0080322027e-01
-      intrinsics = None #np.array([869.11688245,  869.12557739,  639.,         359.12569043])
-      save_name = 'errors_default_int24' + postfix
-      run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer)
+    # mjDB_NEGONETOONE, mjDB_INT24
+    depth_mapping =  mujoco.mjtDepthMapping.mjDB_NEGONETOONE
+    depth_precision = mujoco.mjtDepthPrecision.mjDB_INT24
+    ogl_zbuf     = ogl_zbuf_default
+    ogl_zbuf_inv = ogl_zbuf_default_inv
+    z_max_buf = 1.0 - z_max_buf_negz
+    C = None #-1.0080322027e+00
+    D = None #-2.0080322027e-01
+    intrinsics = None #np.array([869.11688245,  869.12557739,  639.,         359.12569043])
+    save_name = 'errors_default_int24' + postfix
+    run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer)
 
-      # mjDB_NEGONETOONE, mjDB_FLOAT32
-      depth_mapping =  mujoco.mjtDepthMapping.mjDB_NEGONETOONE
-      depth_precision = mujoco.mjtDepthPrecision.mjDB_FLOAT32
-      ogl_zbuf     = ogl_zbuf_default
-      ogl_zbuf_inv = ogl_zbuf_default_inv
-      z_max_buf = 1.0 - z_max_buf_negz
-      C = None
-      D = None
-      intrinsics = None
-      save_name = 'errors_default_float32' + postfix
-      run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer)
+    # mjDB_NEGONETOONE, mjDB_FLOAT32
+    depth_mapping =  mujoco.mjtDepthMapping.mjDB_NEGONETOONE
+    depth_precision = mujoco.mjtDepthPrecision.mjDB_FLOAT32
+    ogl_zbuf     = ogl_zbuf_default
+    ogl_zbuf_inv = ogl_zbuf_default_inv
+    z_max_buf = 1.0 - z_max_buf_negz
+    C = None
+    D = None
+    intrinsics = None
+    save_name = 'errors_default_float32' + postfix
+    run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer)
 
-      # mjDB_ONETOZERO, mjDB_INT24
-      depth_mapping =  mujoco.mjtDepthMapping.mjDB_ONETOZERO
-      depth_precision = mujoco.mjtDepthPrecision.mjDB_INT24
-      ogl_zbuf     = ogl_zbuf_negz
-      ogl_zbuf_inv = ogl_zbuf_negz_inv
-      z_max_buf = z_max_buf_negz
-      C = None
-      D = None
-      intrinsics = None
-      save_name = 'errors_revz_int24' + postfix
-      run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer)
+    # mjDB_ONETOZERO, mjDB_INT24
+    depth_mapping =  mujoco.mjtDepthMapping.mjDB_ONETOZERO
+    depth_precision = mujoco.mjtDepthPrecision.mjDB_INT24
+    ogl_zbuf     = ogl_zbuf_negz
+    ogl_zbuf_inv = ogl_zbuf_negz_inv
+    z_max_buf = z_max_buf_negz
+    C = None
+    D = None
+    intrinsics = None
+    save_name = 'errors_revz_int24' + postfix
+    run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer)
 
-      # mjDB_ONETOZERO, mjDB_FLOAT32
-      depth_mapping =  mujoco.mjtDepthMapping.mjDB_ONETOZERO
-      depth_precision = mujoco.mjtDepthPrecision.mjDB_FLOAT32
-      ogl_zbuf     = ogl_zbuf_negz
-      ogl_zbuf_inv = ogl_zbuf_negz_inv
-      z_max_buf = z_max_buf_negz
-      C = None #4.0161013603e-03
-      D = None #1.0040161014e-01
-      intrinsics = None #np.array([869.11688245, 869.11653695, 639.        , 359.12489134])
-      save_name = 'errors_revz_float32' + postfix
-      run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer)
+    # mjDB_ONETOZERO, mjDB_FLOAT32
+    depth_mapping =  mujoco.mjtDepthMapping.mjDB_ONETOZERO
+    depth_precision = mujoco.mjtDepthPrecision.mjDB_FLOAT32
+    ogl_zbuf     = ogl_zbuf_negz
+    ogl_zbuf_inv = ogl_zbuf_negz_inv
+    z_max_buf = z_max_buf_negz
+    C = None #4.0161013603e-03
+    D = None #1.0040161014e-01
+    intrinsics = None #np.array([869.11688245, 869.11653695, 639.        , 359.12489134])
+    save_name = 'errors_revz_float32' + postfix
+    run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer)
 
   plot_errors_all()
