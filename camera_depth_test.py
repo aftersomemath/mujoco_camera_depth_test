@@ -71,15 +71,15 @@ def plot_errors(errors):
 
   for i, (name, error) in enumerate(errors.items()):
       plt.subplot(rows, cols, 1 + i*3 + 0)
-      plt.title(name)
-      plt.plot(error[:, 0], error[:, 1])
-      plt.ylabel('mean')
+      plt.title('|mean|')
+      plt.plot(error[:, 0], np.abs(error[:, 1]))
+      plt.ylabel('|mean|')
       plt.grid(True)
       plt.ticklabel_format(style='sci', scilimits=(0,0), axis='y')
       plt.xlabel('target z')
 
       plt.subplot(rows, cols, 1 + i*3 + 1)
-      plt.title(name)
+      plt.title('std dev')
       plt.plot(error[:, 0], error[:, 2])
       plt.ylabel('std dev')
       plt.grid(True)
@@ -95,9 +95,9 @@ def plot_errors(errors):
       # plt.xlabel('target z')
 
       plt.subplot(rows, cols, 1 + i*3 + 2)
-      plt.title(name)
+      plt.title('|max error|')
       plt.plot(error[:, 0], error[:, 4])
-      plt.ylabel('max')
+      plt.ylabel('|max error|')
       plt.grid(True)
       plt.ticklabel_format(style='sci', scilimits=(0,0), axis='y')
       plt.xlabel('target z')
@@ -163,7 +163,7 @@ def optimize_intrinsics(optimization_dictionaries, N):
   print('delta intrinsics', result.x - x0)
   return result.x
 
-def collect_data(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d, random_angle, use_renderer):
+def collect_data(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_min_buf, z_max_buf, C, D, intrinsics, view, m, d, random_angle, use_renderer, test_close):
   print(depth_mapping, depth_precision)
   renderer = mujoco.Renderer(m, height=RES_Y, width=RES_X,
                              depth_mapping=depth_mapping, depth_precision=depth_precision)
@@ -239,6 +239,7 @@ def collect_data(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_b
   # Check XML reference, choice of zfar and znear can have big effect on accuracy
   zfar  = m.vis.map.zfar * m.stat.extent
   znear = m.vis.map.znear * m.stat.extent
+  z_target_min = ogl_zbuf_inv(z_min_buf, znear, zfar)
   z_target_max = ogl_zbuf_inv(z_max_buf, znear, zfar)
 
   while True:
@@ -423,12 +424,18 @@ def collect_data(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_b
       view.sync()
 
     # Set the position of the moving target
-    if d.time * 2 > z_target_max - znear:
+    if test_close:
+      distance_range = 0.05 * (z_target_max - z_target_min)
+      velocity = 0.2
+    else:
+      distance_range = z_target_max - z_target_min
+      velocity = 2.0
+
+    if d.time * velocity > distance_range:
       break
 
-    next_target_depth = (d.time * 2) % (z_target_max - znear) + znear
-    # next_target_depth = (d.time * 2) % (z_target_max - 0.9 * z_target_max) + 0.9 * z_target_max
-    # next_target_depth = z_target_max
+    next_target_depth = ((d.time * velocity) % distance_range) + z_target_min
+
     d.mocap_pos[m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'target')], :][1] = next_target_depth
 
     if random_angle:
@@ -453,7 +460,7 @@ def collect_data(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_b
 
   return errors, optimization_dictionaries
 
-def run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, use_viewer, use_renderer):
+def run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, use_viewer, use_renderer, test_close):
   m = mujoco.MjModel.from_xml_path('./camera_depth_test.xml')
   d = mujoco.MjData(m)
 
@@ -466,7 +473,8 @@ def run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, 
     view = None
 
   random.seed(None) # Use system time as seed for data (random training set)
-  errors, optimization_dictionaries = collect_data(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, view, m, d, random_angle=True, use_renderer=use_renderer)
+  random_angle = True
+  errors, optimization_dictionaries = collect_data(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_min_buf, z_max_buf, C, D, intrinsics, view, m, d, random_angle=random_angle, use_renderer=use_renderer, test_close=test_close)
   if view:
     view.close()
 
@@ -476,7 +484,7 @@ def run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, 
   if use_viewer:
     view = viewer.launch_passive(m, d)
   random.seed(0) # Seed random angle with 0 (non random test set, which will be the same for all versions of z buffer)
-  new_errors, new_optimization_dictionaries = collect_data(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, new_intrinsics, view, m, d, random_angle=True, use_renderer=use_renderer)
+  new_errors, new_optimization_dictionaries = collect_data(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_min_buf, z_max_buf, C, D, new_intrinsics, view, m, d, random_angle=random_angle, use_renderer=use_renderer, test_close=test_close)
   if view:
     view.close()
 
@@ -491,9 +499,11 @@ if __name__ == '__main__':
   parser.add_argument('--plot', action='store_true')
   parser.add_argument('--viewer', action='store_true')
   parser.add_argument('--use_renderer', action='store_true')
+  parser.add_argument('--close', action='store_true', help='test close to znear')
   args = parser.parse_args()
 
   z_max_buf_negz = (0.0035 / 2) + (0.0035 / 4) + (0.0035 / 8)
+  z_min_buf_negz = 1.0 - z_max_buf_negz
 
   if not args.plot:
     use_renderer = args.use_renderer
@@ -507,47 +517,51 @@ if __name__ == '__main__':
     depth_precision = mujoco.mjtDepthPrecision.mjDB_INT24
     ogl_zbuf     = ogl_zbuf_default
     ogl_zbuf_inv = ogl_zbuf_default_inv
+    z_min_buf = 1.0 - z_min_buf_negz
     z_max_buf = 1.0 - z_max_buf_negz
     C = None #-1.0080322027e+00
     D = None #-2.0080322027e-01
     intrinsics = None #np.array([869.11688245,  869.12557739,  639.,         359.12569043])
     save_name = 'errors_default_int24' + postfix
-    run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer)
+    run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer, args.close)
 
     # mjDB_NEGONETOONE, mjDB_FLOAT32
     depth_mapping =  mujoco.mjtDepthMapping.mjDB_NEGONETOONE
     depth_precision = mujoco.mjtDepthPrecision.mjDB_FLOAT32
     ogl_zbuf     = ogl_zbuf_default
     ogl_zbuf_inv = ogl_zbuf_default_inv
+    z_min_buf = 1.0 - z_min_buf_negz
     z_max_buf = 1.0 - z_max_buf_negz
     C = None
     D = None
     intrinsics = None
     save_name = 'errors_default_float32' + postfix
-    run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer)
+    run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer, args.close)
 
     # mjDB_ONETOZERO, mjDB_INT24
     depth_mapping =  mujoco.mjtDepthMapping.mjDB_ONETOZERO
     depth_precision = mujoco.mjtDepthPrecision.mjDB_INT24
     ogl_zbuf     = ogl_zbuf_negz
     ogl_zbuf_inv = ogl_zbuf_negz_inv
+    z_min_buf = z_min_buf_negz
     z_max_buf = z_max_buf_negz
     C = None
     D = None
     intrinsics = None
     save_name = 'errors_revz_int24' + postfix
-    run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer)
+    run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer, args.close)
 
     # mjDB_ONETOZERO, mjDB_FLOAT32
     depth_mapping =  mujoco.mjtDepthMapping.mjDB_ONETOZERO
     depth_precision = mujoco.mjtDepthPrecision.mjDB_FLOAT32
     ogl_zbuf     = ogl_zbuf_negz
     ogl_zbuf_inv = ogl_zbuf_negz_inv
+    z_min_buf = z_min_buf_negz
     z_max_buf = z_max_buf_negz
     C = None #4.0161013603e-03
     D = None #1.0040161014e-01
     intrinsics = None #np.array([869.11688245, 869.11653695, 639.        , 359.12489134])
     save_name = 'errors_revz_float32' + postfix
-    run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer)
+    run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer, args.close)
 
   plot_errors_all()
