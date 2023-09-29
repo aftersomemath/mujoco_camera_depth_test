@@ -183,7 +183,7 @@ def collect_data(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_min_b
 
     # ctx = mujoco.MjrContext(m, mujoco.mjtFontScale.mjFONTSCALE_150, depth_mapping, depth_precision)
     ctx = mujoco.MjrContext(m, mujoco.mjtFontScale.mjFONTSCALE_150)
-    ctx.readDepthMapping = depth_mapping
+    ctx.readDepthMap = depth_mapping
 
     mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, ctx)
 
@@ -553,7 +553,7 @@ if __name__ == '__main__':
     # run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer, args.close)
 
     # mjDM_ZEROTOONE
-    depth_mapping =  mujoco.mjtDepthMapping.mjDM_ZEROTOONE
+    depth_mapping =  mujoco.mjtDepthMap.mjDEPTHMAP_01
     depth_precision = 1
     ogl_zbuf     = ogl_zbuf_default
     ogl_zbuf_inv = ogl_zbuf_default_inv
@@ -566,7 +566,7 @@ if __name__ == '__main__':
     run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer, args.close)
 
     # mjDM_ONETOZERO
-    depth_mapping   = mujoco.mjtDepthMapping.mjDM_ONETOZERO
+    depth_mapping   = mujoco.mjtDepthMap.mjDEPTHMAP_10
     depth_precision = 1
     ogl_zbuf     = ogl_zbuf_negz
     ogl_zbuf_inv = ogl_zbuf_negz_inv
@@ -580,7 +580,7 @@ if __name__ == '__main__':
 
     # mjDM_ONETOZERO, renderer.py
     use_renderer = True
-    depth_mapping   = mujoco.mjtDepthMapping.mjDM_ONETOZERO
+    depth_mapping   = mujoco.mjtDepthMap.mjDEPTHMAP_10
     depth_precision = 1
     ogl_zbuf     = ogl_zbuf_negz
     ogl_zbuf_inv = ogl_zbuf_negz_inv
