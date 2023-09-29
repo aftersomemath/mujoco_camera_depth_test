@@ -553,7 +553,7 @@ if __name__ == '__main__':
     # run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer, args.close)
 
     # mjDM_ZEROTOONE
-    depth_mapping =  mujoco.mjtDepthMap.mjDEPTHMAP_01
+    depth_mapping =  mujoco.mjtDepthMap.mjDEPTH_ZERONEAR
     depth_precision = 1
     ogl_zbuf     = ogl_zbuf_default
     ogl_zbuf_inv = ogl_zbuf_default_inv
@@ -566,7 +566,7 @@ if __name__ == '__main__':
     run_test(depth_mapping, depth_precision, ogl_zbuf, ogl_zbuf_inv, z_max_buf, C, D, intrinsics, save_name, args.viewer, use_renderer, args.close)
 
     # mjDM_ONETOZERO
-    depth_mapping   = mujoco.mjtDepthMap.mjDEPTHMAP_10
+    depth_mapping   = mujoco.mjtDepthMap.mjDEPTH_ZEROFAR
     depth_precision = 1
     ogl_zbuf     = ogl_zbuf_negz
     ogl_zbuf_inv = ogl_zbuf_negz_inv
@@ -580,7 +580,7 @@ if __name__ == '__main__':
 
     # mjDM_ONETOZERO, renderer.py
     use_renderer = True
-    depth_mapping   = mujoco.mjtDepthMap.mjDEPTHMAP_10
+    depth_mapping   = mujoco.mjtDepthMap.mjDEPTH_ZEROFAR
     depth_precision = 1
     ogl_zbuf     = ogl_zbuf_negz
     ogl_zbuf_inv = ogl_zbuf_negz_inv
